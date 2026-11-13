@@ -32,38 +32,37 @@ jobs:
           ln -svf rootfs.img mico_lx01/root.squashfs
           sudo unsquashfs -d squashfs-root mico_lx01/root.squashfs
 
-      - name: Enable Full Writable Root (OverlayFS), Serial Shell, SSH and SCP
+      - name: Enable Writable Etc/Root, Serial Shell, SSH and SCP (Strict Password)
         run: |
           # 1. 开启串口免密 root shell
           sudo sed -i 's|::askconsole:/bin/login|::askconsole:/bin/ash --login|g' squashfs-root/etc/inittab
           sudo sed -i 's|ttyS0::askfirst:/bin/login|ttyS0::askfirst:/bin/ash --login|g' squashfs-root/etc/inittab
 
-          # 2. 设置默认 root 密码为 root，并恢复标准 pam_unix.so 严格密码校验
-          HASH=$(openssl passwd -5 "root")
+          # 2. 使用全系统兼容的 MD5 (-1) 哈希预设 root 密码为 root，删除会引发验证报错的 pam_unix.so
+          HASH=$(openssl passwd -1 "root")
           sudo sed -i "s|^root:[^:]*:|root:${HASH}:|" squashfs-root/etc/shadow
-          if [ -f squashfs-root/etc/pam.d/common-auth ]; then
-            echo "auth required pam_unix.so" | sudo tee squashfs-root/etc/pam.d/common-auth
-          fi
+          sudo rm -f squashfs-root/etc/pam.d/common-auth
 
-          # 3. 注入开机全系统 OverlayFS 可写挂载（自动降级为 mount --bind 保底，防止内核未编译 overlay 模块时启动异常）
-          sudo tee squashfs-root/etc/init.d/00_writable_root << 'EOF'
+          # 3. 注入开机自动绑定挂载 /etc 和 /root 到可写的 /data 分区（支持 passwd 改密与 uci 保存配置，重启永久生效）
+          sudo tee squashfs-root/etc/init.d/writable_cfg << 'EOF'
           #!/bin/sh /etc/rc.common
-          START=11
+          START=10
           start() {
-              mkdir -p /data/overlay/upper /data/overlay/work /data/overlay/etc /data/overlay/root
-              if grep -q overlay /proc/filesystems; then
-                  mount -t overlay overlay -o lowerdir=/,upperdir=/data/overlay/upper,workdir=/data/overlay/work / 2>/dev/null || true
-              else
-                  # 若内核未开启 overlayfs，则自动将最常用的 /etc 和 /root 绑定为永久可写目录
-                  [ -f /data/overlay/etc/.initialized ] || { cp -a /etc/* /data/overlay/etc/ && touch /data/overlay/etc/.initialized; }
-                  [ -f /data/overlay/root/.initialized ] || { cp -a /root/* /data/overlay/root/ 2>/dev/null || true; touch /data/overlay/root/.initialized; }
-                  mount --bind /data/overlay/etc /etc
-                  mount --bind /data/overlay/root /root
+              mkdir -p /data/overlay/etc /data/overlay/root
+              if [ ! -f /data/overlay/etc/.init_ok ]; then
+                  cp -a /etc/* /data/overlay/etc/
+                  touch /data/overlay/etc/.init_ok
               fi
+              if [ ! -f /data/overlay/root/.init_ok ]; then
+                  cp -a /root/* /data/overlay/root/ 2>/dev/null || true
+                  touch /data/overlay/root/.init_ok
+              fi
+              mount --bind /data/overlay/etc /etc
+              mount --bind /data/overlay/root /root
           }
           EOF
-          sudo chmod +x squashfs-root/etc/init.d/00_writable_root
-          sudo ln -sf /etc/init.d/00_writable_root squashfs-root/etc/rc.d/S11writable_root
+          sudo chmod +x squashfs-root/etc/init.d/writable_cfg
+          sudo ln -sf /etc/init.d/writable_cfg squashfs-root/etc/rc.d/S10writable_cfg
 
           # 4. 开启 dropbear (SSH + SCP) 开机自启与密码登录
           sudo python3 -c '
