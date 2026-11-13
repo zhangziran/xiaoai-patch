@@ -25,7 +25,7 @@ jobs:
 
       - name: Download and extract official Xiaomi firmware
         run: |
-          mkdir -p mico_lx01
+          rm -rf mico_lx01
           wget -O mico_lx01.bin "https://cdn.cnbj1.fds.api.mi-img.com/xiaoqiang/rom/lx01/mico_firmware_4215788a8_1.62.6.bin" || \
           wget -O mico_lx01.bin "https://cdn.cnbj1.fds.api.mi-img.com/xiaoqiang/rom/lx01/mico_firmware_c1cac_1.56.1.bin"
           python3 ./tools/mico_firmware.py -d mico_lx01 -e mico_lx01.bin -i
