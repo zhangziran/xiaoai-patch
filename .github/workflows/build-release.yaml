@@ -18,31 +18,20 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Pull base image
-        id: base
-        env:
-          IMAGE: ghcr.io/duhow/xiaoai-patch/lx01:base
+      - name: Install dependencies
         run: |
-          sudo mkdir -p /root/.docker
-          sudo ln -svf $HOME/.docker/config.json /root/.docker/config.json
-          sudo make pull MODEL=lx01
+          sudo apt-get update
+          sudo apt-get install -y squashfs-tools python3 wget
 
-          VERSION=`docker inspect ${IMAGE} | jq -r '.[0].Config.Labels["org.opencontainers.image.version"]'`
-          echo "version=${VERSION}" >> ${GITHUB_OUTPUT}
-
-          UPDATE=`docker inspect ${IMAGE} | jq -r '.[0].Config.Labels["org.opencontainers.image.source"]'`
-          wget -q -O mico_lx01.bin "${UPDATE}"
-
-          ./tools/mico_firmware.py -d mico_lx01 -e mico_lx01.bin -i
+      - name: Download and extract official Xiaomi firmware
+        run: |
+          mkdir -p mico_lx01
+          wget -O mico_lx01.bin "https://cdn.cnbj1.fds.api.mi-img.com/xiaoqiang/rom/lx01/mico_firmware_1.32.6.bin" || \
+          wget -O mico_lx01.bin "https://cdn.cnbj1.fds.api.mi-img.com/xiaoqiang/rom/lx01/mico_firmware_1.56.1.bin"
+          python3 ./tools/mico_firmware.py -d mico_lx01 -e mico_lx01.bin -i
           ln -svf kernel.img mico_lx01/boot.img
           ln -svf rootfs.img mico_lx01/root.squashfs
+          sudo make extract MODEL=lx01
 
       - name: Download prebuilt packages from upstream
         run: |
