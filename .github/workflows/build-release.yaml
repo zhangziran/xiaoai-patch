@@ -38,7 +38,7 @@ jobs:
           sudo sed -i 's|::askconsole:/bin/login|::askconsole:/bin/ash --login|g' squashfs-root/etc/inittab
           sudo sed -i 's|ttyS0::askfirst:/bin/login|ttyS0::askfirst:/bin/ash --login|g' squashfs-root/etc/inittab
 
-          # 2. 将 root 密码修改为 root（同时保留原厂认证兼容性）
+          # 2. 将 root 密码修改为 root
           HASH=$(openssl passwd -5 "root")
           sudo sed -i "s|^root:[^:]*:|root:${HASH}:|" squashfs-root/etc/shadow
 
@@ -54,9 +54,10 @@ jobs:
             sudo ln -sf /etc/init.d/dropbear squashfs-root/etc/rc.d/K50dropbear
           fi
 
-          # 5. 保留原厂 ssh 公钥软链接支持（方便后续免密）
+          # 5. 保留原厂 ssh 公钥软链接支持并补齐 update.sh 以满足 release 打包
           sudo mkdir -p squashfs-root/root
           sudo ln -sfn /data/ssh squashfs-root/root/.ssh
+          sudo cp -vf bin/update.sh squashfs-root/bin/update.sh
 
       - name: Pack firmware image
         id: artifact
