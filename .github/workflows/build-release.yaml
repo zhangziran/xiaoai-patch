@@ -32,26 +32,29 @@ jobs:
           ln -svf rootfs.img mico_lx01/root.squashfs
           sudo unsquashfs -d squashfs-root mico_lx01/root.squashfs
 
-      - name: Enable Root, Serial Shell, SSH and SCP (with strict password check)
+      - name: Enable Root, Serial Shell, SSH and SCP (with persistent passwd)
         run: |
           # 1. 开启串口免密 root shell
           sudo sed -i 's|::askconsole:/bin/login|::askconsole:/bin/ash --login|g' squashfs-root/etc/inittab
           sudo sed -i 's|ttyS0::askfirst:/bin/login|ttyS0::askfirst:/bin/ash --login|g' squashfs-root/etc/inittab
 
-          # 2. 设置 root 密码（可把下面引号里的 "root" 改成你自己的复杂密码）
+          # 2. 预设默认 root 密码为 root，并将 /etc/shadow 软链接到可读写的 /data/etc/shadow
           HASH=$(openssl passwd -5 "root")
           sudo sed -i "s|^root:[^:]*:|root:${HASH}:|" squashfs-root/etc/shadow
+          sudo cp -vf squashfs-root/etc/shadow squashfs-root/etc/shadow.default
+          sudo rm -f squashfs-root/etc/shadow
+          sudo ln -sfn /data/etc/shadow squashfs-root/etc/shadow
 
-          # 3. 使用标准 pam_unix.so 严格校验 /etc/shadow 密码（禁止任意密码登录）
+          # 3. 使用标准 pam_unix.so 严格校验密码（禁止任意密码登录）
           if [ -f squashfs-root/etc/pam.d/common-auth ]; then
             echo "auth required pam_unix.so" | sudo tee squashfs-root/etc/pam.d/common-auth
           fi
 
-          # 4. 永久绕过 /data/ssh_en 检查并默认开启 SSH 密码登录
+          # 4. 开机自动初始化 /data/etc/shadow 并自启 dropbear (SSH + SCP)
           if [ -f squashfs-root/etc/init.d/dropbear ]; then
             sudo sed -i "s|'PasswordAuth:bool:0'|'PasswordAuth:bool:1'|g" squashfs-root/etc/init.d/dropbear
             sudo sed -i "s|'RootPasswordAuth:bool:0'|'RootPasswordAuth:bool:1'|g" squashfs-root/etc/init.d/dropbear
-            sudo sed -i 's|if \[ "$ssh_en" != "1".*then|if false; then|g' squashfs-root/etc/init.d/dropbear
+            sudo sed -i 's|if \[ "$ssh_en" != "1".*then|mkdir -p /data/etc; [ -s /data/etc/shadow ] || cp /etc/shadow.default /data/etc/shadow\n        if false; then|g' squashfs-root/etc/init.d/dropbear
             sudo ln -sf /etc/init.d/dropbear squashfs-root/etc/rc.d/S50dropbear
             sudo ln -sf /etc/init.d/dropbear squashfs-root/etc/rc.d/K50dropbear
           fi
