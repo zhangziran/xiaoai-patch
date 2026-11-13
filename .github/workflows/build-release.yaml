@@ -21,47 +21,51 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y squashfs-tools python3 wget
+          sudo apt-get install -y squashfs-tools python3 wget openssl
 
-      - name: Download and extract official Xiaomi firmware
+      - name: Download and extract official Xiaomi 1.62.6 firmware
         run: |
-          rm -rf mico_lx01
-          wget -O mico_lx01.bin "https://cdn.cnbj1.fds.api.mi-img.com/xiaoqiang/rom/lx01/mico_firmware_4215788a8_1.62.6.bin" || \
-          wget -O mico_lx01.bin "https://cdn.cnbj1.fds.api.mi-img.com/xiaoqiang/rom/lx01/mico_firmware_c1cac_1.56.1.bin"
+          rm -rf mico_lx01 squashfs-root
+          wget -O mico_lx01.bin "https://cdn.cnbj1.fds.api.mi-img.com/xiaoqiang/rom/lx01/mico_firmware_4215788a8_1.62.6.bin"
           python3 ./tools/mico_firmware.py -d mico_lx01 -e mico_lx01.bin -i
           ln -svf kernel.img mico_lx01/boot.img
           ln -svf rootfs.img mico_lx01/root.squashfs
-          sudo make extract MODEL=lx01
+          sudo unsquashfs -d squashfs-root mico_lx01/root.squashfs
 
-      - name: Download prebuilt packages from upstream
+      - name: Enable Root, Serial Shell, SSH and SCP (keep all Xiaomi features)
         run: |
-          mkdir -p build-packages/s2t/armv7
-          wget -q -O bin-armv7.tar.gz "https://github.com/duhow/xiaoai-patch/releases/latest/download/bin-armv7.tar.gz" || true
-          if [ -s bin-armv7.tar.gz ]; then
-            sudo tar xzvf bin-armv7.tar.gz -C build-packages/s2t/armv7
+          # 1. 开启串口免密 root shell
+          sudo sed -i 's|::askconsole:/bin/login|::askconsole:/bin/ash --login|g' squashfs-root/etc/inittab
+          sudo sed -i 's|ttyS0::askfirst:/bin/login|ttyS0::askfirst:/bin/ash --login|g' squashfs-root/etc/inittab
+
+          # 2. 将 root 密码修改为 root（同时保留原厂认证兼容性）
+          HASH=$(openssl passwd -5 "root")
+          sudo sed -i "s|^root:[^:]*:|root:${HASH}:|" squashfs-root/etc/shadow
+
+          # 3. 解除 PAM 登录限制，允许密码登录 SSH
+          if [ -f squashfs-root/etc/pam.d/common-auth ]; then
+            sudo sed -i 's/^auth/#auth/g' squashfs-root/etc/pam.d/common-auth
+            echo "auth sufficient pam_permit.so" | sudo tee -a squashfs-root/etc/pam.d/common-auth
           fi
 
-      - name: Patch scripts for original Xiaoai
-        run: |
-          rm -f scripts/20_disable_services.sh
-          rm -f scripts/21_patch_service_bluetooth.sh
-          rm -f scripts/24_remove_property_bin.sh
-          rm -f scripts/40_sounds.sh
-          rm -rf build-packages/s2t/armv7/whisper* 2>/dev/null || true
-          rm -rf build-packages/s2t/armv7/porcupine* 2>/dev/null || true
-          rm -rf build-packages/s2t/armv7/mpd* 2>/dev/null || true
-          rm -rf build-packages/s2t/armv7/shairport-sync* 2>/dev/null || true
+          # 4. 开启 dropbear (SSH + SCP) 开机自启
+          if [ -f squashfs-root/etc/init.d/dropbear ]; then
+            sudo ln -sf /etc/init.d/dropbear squashfs-root/etc/rc.d/S50dropbear
+            sudo ln -sf /etc/init.d/dropbear squashfs-root/etc/rc.d/K50dropbear
+          fi
 
-      - name: Build artifact
-        run: sudo -E make patch build release MODEL=lx01
+          # 5. 保留原厂 ssh 公钥软链接支持（方便后续免密）
+          sudo mkdir -p squashfs-root/root
+          sudo ln -sfn /data/ssh squashfs-root/root/.ssh
 
-      - name: Prepare artifact
+      - name: Pack firmware image
         id: artifact
         run: |
-          FILE=`ls -1 release/lx01/mico_*.tar | head -n 1`
-          NAME=`basename ${FILE}`
+          sudo -E make build release MODEL=lx01
+          FILE=$(ls -1 release/lx01/mico_*.tar | head -n 1)
+          NAME=$(basename "${FILE}")
           echo "name=${NAME}" >> ${GITHUB_OUTPUT}
-          cp -vf ${FILE} .
+          cp -vf "${FILE}" .
 
       - name: Upload artifact to Workflow Run
         uses: actions/upload-artifact@v7
