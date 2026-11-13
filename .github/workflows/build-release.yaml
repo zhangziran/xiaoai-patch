@@ -8,146 +8,67 @@ permissions:
 
 on:
   workflow_dispatch:
-  push:
-    tags:
-      - '*.*.*'
 
 jobs:
-  packages:
-    name: Packages
-    strategy:
-      fail-fast: true
-      matrix:
-        model: [lx01]
-    uses: ./.github/workflows/build-packages.yaml
-    with:
-      model: ${{ matrix.model }}
-
   image:
     name: Image
-    needs: [packages]
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        model: [lx01]
     env:
-      MODEL: ${{ matrix.model }}
-      PULL_PACKAGES: true
-      UPLOAD_RELEASE: false
+      MODEL: lx01
     steps:
       - uses: actions/checkout@v6
-
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Pull base image
         id: base
         env:
-          IMAGE: ghcr.io/duhow/xiaoai-patch/${{ matrix.model }}:base
+          IMAGE: ghcr.io/duhow/xiaoai-patch/lx01:base
         run: |
-          sudo mkdir -p /root/.docker
-          sudo ln -svf $HOME/.docker/config.json /root/.docker/config.json
-          sudo make pull MODEL=$MODEL
+          sudo make pull MODEL=lx01
 
           VERSION=`docker inspect ${IMAGE} | jq -r '.[0].Config.Labels["org.opencontainers.image.version"]'`
           echo "version=${VERSION}" >> ${GITHUB_OUTPUT}
 
-          # download update file and extract
           UPDATE=`docker inspect ${IMAGE} | jq -r '.[0].Config.Labels["org.opencontainers.image.source"]'`
-          echo "::add-mask::${UPDATE}"
-          echo "::add-mask::`basename ${UPDATE}`"
-          wget -q -O mico_${MODEL}.bin "${UPDATE}"
+          wget -q -O mico_lx01.bin "${UPDATE}"
 
-          ./tools/mico_firmware.py -d mico_${MODEL} -e mico_${MODEL}.bin -i
+          ./tools/mico_firmware.py -d mico_lx01 -e mico_lx01.bin -i
+          ln -svf kernel.img mico_lx01/boot.img
+          ln -svf rootfs.img mico_lx01/root.squashfs
 
-          # generate links for files
-          if [ "$MODEL" = "lx01" ]; then
-            ln -svf kernel.img mico_${MODEL}/boot.img
-            ln -svf rootfs.img mico_${MODEL}/root.squashfs
-          fi
-
-      - name: Pull build packages
-        uses: actions/download-artifact@v8
-        if: ${{ env.PULL_PACKAGES == 'true' }}
-        with:
-          name: build-${{ matrix.model }}
-          path: build-packages/targets/
-
-      - name: Extract build packages
-        if: ${{ env.PULL_PACKAGES == 'true' }}
-        env:
-          SOURCE_DIR: build-packages/targets
-          TARGET: build-packages/s2t/armv7
+      - name: Download prebuilt packages from upstream
         run: |
-          mkdir -p ${TARGET}
-          sudo tar xzvf ${SOURCE_DIR}/bin-*.tar.gz -C ${TARGET}
+          mkdir -p build-packages/s2t/armv7
+          wget -q -O bin-armv7.tar.gz "https://github.com/duhow/xiaoai-patch/releases/latest/download/bin-armv7.tar.gz" || true
+          if [ -s bin-armv7.tar.gz ]; then
+            sudo tar xzvf bin-armv7.tar.gz -C build-packages/s2t/armv7
+          fi
 
       - name: Patch scripts for original Xiaoai
         run: |
-          # 删除清理小米原厂服务的脚本，保留小爱同学、蓝牙、DLNA
           rm -f scripts/20_disable_services.sh
           rm -f scripts/21_patch_service_bluetooth.sh
           rm -f scripts/24_remove_property_bin.sh
           rm -f scripts/40_sounds.sh
-          # 删除大体积的开源语音包与播放器，防止 LX01 打包超限，同时保留 ssh/scp 环境
           rm -rf build-packages/s2t/armv7/whisper* 2>/dev/null || true
           rm -rf build-packages/s2t/armv7/porcupine* 2>/dev/null || true
           rm -rf build-packages/s2t/armv7/mpd* 2>/dev/null || true
           rm -rf build-packages/s2t/armv7/shairport-sync* 2>/dev/null || true
 
       - name: Build artifact
-        run: sudo -E make patch build release MODEL=${MODEL}
+        run: sudo -E make patch build release MODEL=lx01
 
       - name: Prepare artifact
         id: artifact
-        env:
-          BASE_VERSION: ${{ steps.base.outputs.version }}
         run: |
-          FILE=`ls -1 release/${MODEL}/mico_*.tar | head -n 1`
-          HASH=`md5sum ${FILE} | awk '{print $1}'`
-          echo "hash=${HASH}" | tee -a ${GITHUB_OUTPUT}
+          FILE=`ls -1 release/lx01/mico_*.tar | head -n 1`
           NAME=`basename ${FILE}`
-          echo "name=${NAME}" | tee -a ${GITHUB_OUTPUT}
-
+          echo "name=${NAME}" >> ${GITHUB_OUTPUT}
           cp -vf ${FILE} .
 
-          SIZE=`stat -c%s ${NAME}`
-          echo "size=${SIZE}" | tee -a ${GITHUB_OUTPUT}
-
-          {
-            echo '```json'
-            jq -nc \
-              --arg name "$NAME" \
-              --argjson size "$SIZE" \
-              --arg hash "$HASH" \
-              --arg version "$BASE_VERSION" \
-              '{"name": $name, "size": $size, "hash": $hash, "base_version": $version}'
-            echo '```'
-          } >> ${GITHUB_STEP_SUMMARY}
-
-      - name: Upload artifact to release
-        if: ${{ env.UPLOAD_RELEASE == 'true' }}
-        uses: softprops/action-gh-release@v2
-        with:
-          files: ${{ steps.artifact.outputs.name }}
-          draft: true
-
       - name: Upload artifact to Workflow Run
-        if: ${{ env.UPLOAD_RELEASE == 'false' }}
         uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.artifact.outputs.name }}
           path: ${{ steps.artifact.outputs.name }}
           retention-days: 10
           if-no-files-found: error
-
-      - name: Attest Build Provenance
-        uses: actions/attest@v4
-        with:
-          subject-path: ${{ steps.artifact.outputs.name }}
-          show-summary: false
